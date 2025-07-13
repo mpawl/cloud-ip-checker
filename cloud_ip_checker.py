@@ -34,7 +34,7 @@ PROVIDERS = {
         "filename": "google.json"
     },
     "oci": {
-        "url": None,
+        "url": "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
         "filename": "oci.json"
     },
     "m365": {
