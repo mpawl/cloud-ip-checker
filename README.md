@@ -11,6 +11,7 @@
 * Microsoft 365 (M365)
 * Oracle Cloud Infrastructure (OCI)
 * Digital Ocean
+* Linode
 
 # Dependencies
 
@@ -195,6 +196,18 @@ Match:
   region: US-CA
   city: San Francisco
   zip_code: 94124
+```
+
+### Linode
+
+```
+Matches for IP 66.228.32.0:
+Match:
+  provider: Linode
+  cidr: 66.228.32.0/24
+  country: US
+  region: US-NJ
+  city: Cedar Knolls
 ```
 
 ## Programmatically

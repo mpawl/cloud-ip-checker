@@ -12,7 +12,7 @@ import shutil
 import ipaddress
 import urllib.request
 from urllib.error import URLError, HTTPError
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # This is the directory inside of the current directory where data files will be stored.
 DATA_DIR = "cloud_ip_data"
@@ -43,6 +43,10 @@ PROVIDERS = {
     "do": {
         "url": "https://digitalocean.com/geo/google.csv",
         "filename": "digitalocean.csv"
+    },
+    "linode": {
+        "url": "https://geoip.linode.com/",
+        "filename": "linode.csv"
     },
     "m365": {
         "url": "https://endpoints.office.com/endpoints/worldwide?clientrequestid=b10c5ed1-bad1-445f-b386-b919946339a7",
@@ -86,6 +90,78 @@ class CloudIPChecker:
             else:
                 logging.info(f"{provider} data already present.")
 
+    def _load_geoip_csv(
+        self,
+        path: str,
+        *,
+        fieldnames: Optional[List[str]] = None,
+        rename: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, Any]]:
+        rename = rename or {}
+        entries: List[Dict[str, Any]] = []
+        with open(path, newline="") as raw_file:
+            filtered_lines = (
+                line
+                for line in raw_file
+                if line.strip()
+                and not line.lstrip().startswith("#")
+                and "," in line
+            )
+            reader = csv.DictReader(
+                filtered_lines,
+                fieldnames=fieldnames,
+                restkey="extra",
+                restval=""
+            )
+            for row in reader:
+                normalized: Dict[str, Any] = {}
+                for key, value in row.items():
+                    if key in (None, "extra"):
+                        continue
+                    key = key.strip()
+                    if not key:
+                        continue
+                    key = key.lower().replace(" ", "_")
+                    key = rename.get(key, key)
+                    if key is None:
+                        continue
+                    if isinstance(value, list):
+                        value = ", ".join(
+                            v.strip() for v in value if isinstance(v, str) and v.strip()
+                        )
+                    elif isinstance(value, str):
+                        value = value.strip()
+                    else:
+                        value = str(value).strip()
+                    if value:
+                        normalized[key] = value
+                cidr = normalized.get("cidr")
+                if not cidr:
+                    continue
+                entries.append(normalized)
+        return entries
+
+    def _collect_geoip_matches(
+        self,
+        ip_obj: ipaddress._BaseAddress,
+        records: List[Dict[str, Any]],
+        provider_label: str
+    ) -> List[Dict[str, Any]]:
+        matches: List[Dict[str, Any]] = []
+        for record in records:
+            cidr = record.get("cidr")
+            if cidr and self._ip_in_cidr(ip_obj, cidr):
+                match = {
+                    "provider": provider_label,
+                    "cidr": cidr
+                }
+                for key, value in record.items():
+                    if key == "cidr" or not value:
+                        continue
+                    match[key] = value
+                matches.append(match)
+        return matches
+
     def is_ip_address(self, ip):
         try:
             ipaddress.ip_address(ip)
@@ -100,36 +176,19 @@ class CloudIPChecker:
                 continue
             try:
                 if provider == "do":
-                    with open(path, newline="") as f:
-                        reader = csv.DictReader(
-                            f,
-                            fieldnames=["cidr", "country", "region", "city", "postal_code"],
-                            restkey="extra",
-                            restval=""
-                        )
-                        entries = []
-                        for row in reader:
-                            cidr = (row.get("cidr") or "").strip()
-                            if not cidr or cidr.startswith("#"):
-                                continue
-                            normalized = {"cidr": cidr}
-                            for key, value in row.items():
-                                if key in (None, "cidr"):
-                                    continue
-                                if value is None:
-                                    continue
-                                if isinstance(value, list):
-                                    value = ", ".join(
-                                        v.strip() for v in value if isinstance(v, str) and v.strip()
-                                    )
-                                elif isinstance(value, str):
-                                    value = value.strip()
-                                else:
-                                    value = str(value).strip()
-                                if value:
-                                    normalized[key.replace(" ", "_")] = value
-                            entries.append(normalized)
-                        self.providers_data[provider] = entries
+                    self.providers_data[provider] = self._load_geoip_csv(
+                        path,
+                        fieldnames=["cidr", "country", "region", "city", "postal_code"]
+                    )
+                elif provider == "linode":
+                    self.providers_data[provider] = self._load_geoip_csv(
+                        path,
+                        fieldnames=["ip_prefix", "alpha2code", "region", "city", "postal_code"],
+                        rename={
+                            "ip_prefix": "cidr",
+                            "alpha2code": "country"
+                        }
+                    )
                 else:
                     with open(path, "r") as f:
                         self.providers_data[provider] = json.load(f)
@@ -197,18 +256,10 @@ class CloudIPChecker:
                         results.append(entry)
 
             elif provider == "do":
-                for record in data:
-                    cidr = record.get("cidr")
-                    if cidr and self._ip_in_cidr(ip_obj, cidr):
-                        match = {
-                            "provider": "Digital Ocean",
-                            "cidr": cidr
-                        }
-                        for key, value in record.items():
-                            if key == "cidr" or not value:
-                                continue
-                            match[key] = value
-                        results.append(match)
+                results.extend(self._collect_geoip_matches(ip_obj, data, "Digital Ocean"))
+
+            elif provider == "linode":
+                results.extend(self._collect_geoip_matches(ip_obj, data, "Linode"))
 
             elif provider == "oci":
                 for region_entry in data.get("regions", []):
