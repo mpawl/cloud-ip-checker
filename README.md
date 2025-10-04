@@ -10,6 +10,7 @@
 * Microsoft Azure 
 * Microsoft 365 (M365)
 * Oracle Cloud Infrastructure (OCI)
+* Digital Ocean
 
 # Dependencies
 
@@ -181,6 +182,19 @@ Match:
   expressRoute: True
   category: Allow
   notes: POP3, IMAP4, SMTP Client traffic
+```
+
+### Digital Ocean
+
+```
+Matches for IP 45.55.1.1:
+Match:
+  provider: Digital Ocean
+  cidr: 45.55.0.0/19
+  country: US
+  region: US-CA
+  city: San Francisco
+  zip_code: 94124
 ```
 
 ## Programmatically
