@@ -103,7 +103,7 @@ class CloudIPChecker:
                     with open(path, newline="") as f:
                         reader = csv.DictReader(
                             f,
-                            fieldnames=["cidr", "country", "region", "city", "zip_code"],
+                            fieldnames=["cidr", "country", "region", "city", "postal_code"],
                             restkey="extra",
                             restval=""
                         )
