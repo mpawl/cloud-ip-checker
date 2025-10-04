@@ -13,6 +13,7 @@
 * Digital Ocean
 * Linode
 * Cloudflare
+* Fastly
 
 # Dependencies
 
@@ -218,6 +219,14 @@ Matches for IP 103.21.244.5:
 Match:
   provider: Cloudflare
   cidr: 103.21.244.0/22
+```
+### Fastly
+
+```
+Matches for IP 23.235.32.1:
+Match:
+  provider: Fastly
+  cidr: 23.235.32.0/20
 ```
 
 ## Programmatically

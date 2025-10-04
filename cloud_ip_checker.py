@@ -55,6 +55,10 @@ PROVIDERS = {
         ],
         "filename": "cloudflare.txt"
     },
+    "fastly": {
+        "url": "https://api.fastly.com/public-ip-list",
+        "filename": "fastly.json"
+    },
     "m365": {
         "url": "https://endpoints.office.com/endpoints/worldwide?clientrequestid=b10c5ed1-bad1-445f-b386-b919946339a7",
         "filename": "m365.json"
@@ -243,6 +247,16 @@ class CloudIPChecker:
                     )
                 elif provider == "cloudflare":
                     self.providers_data[provider] = self._load_cidr_file(path)
+                elif provider == "fastly":
+                    with open(path, "r") as f:
+                        payload = json.load(f)
+                    fastly_records: List[Dict[str, Any]] = []
+                    for key in ("addresses", "ipv6_addresses"):
+                        for cidr in payload.get(key, []):
+                            cidr = cidr.strip()
+                            if cidr:
+                                fastly_records.append({"cidr": cidr})
+                    self.providers_data[provider] = fastly_records
                 elif provider == "linode":
                     self.providers_data[provider] = self._load_geoip_csv(
                         path,
@@ -323,6 +337,9 @@ class CloudIPChecker:
 
             elif provider == "cloudflare":
                 results.extend(self._collect_geoip_matches(ip_obj, data, "Cloudflare"))
+
+            elif provider == "fastly":
+                results.extend(self._collect_geoip_matches(ip_obj, data, "Fastly"))
 
             elif provider == "linode":
                 results.extend(self._collect_geoip_matches(ip_obj, data, "Linode"))
