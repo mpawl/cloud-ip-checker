@@ -6,12 +6,15 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 import sys
 import argparse
 import json
+import csv
 import os
+import shutil
 import ipaddress
 import urllib.request
+from urllib.error import URLError, HTTPError
 from typing import List, Dict, Any
 
-# This is the direcotry inside of the current directory where data files will be stored.
+# This is the directory inside of the current directory where data files will be stored.
 DATA_DIR = "cloud_ip_data"
 
 # Monitored providers and the URLs to download the data files. Microsoft data files are not currently
@@ -37,6 +40,10 @@ PROVIDERS = {
         "url": "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
         "filename": "oci.json"
     },
+    "do": {
+        "url": "https://digitalocean.com/geo/google.csv",
+        "filename": "digitalocean.csv"
+    },
     "m365": {
         "url": "https://endpoints.office.com/endpoints/worldwide?clientrequestid=b10c5ed1-bad1-445f-b386-b919946339a7",
         "filename": "m365.json"
@@ -57,7 +64,25 @@ class CloudIPChecker:
             path = os.path.join(self.data_dir, meta["filename"])
             if force or not os.path.exists(path):
                 logging.info(f"Downloading {provider} data...")
-                urllib.request.urlretrieve(meta["url"], path)
+                try:
+                    request = urllib.request.Request(meta["url"], headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(request) as response, open(path, "wb") as out_file:
+                        shutil.copyfileobj(response, out_file)
+                except HTTPError as e:
+                    logging.error(f"Failed to download {provider} data (HTTP {e.code}: {e.reason}).")
+                    if os.path.exists(path):
+                        os.remove(path)
+                    continue
+                except URLError as e:
+                    logging.error(f"Failed to download {provider} data ({e.reason}).")
+                    if os.path.exists(path):
+                        os.remove(path)
+                    continue
+                except Exception as e:
+                    logging.error(f"Unexpected error downloading {provider} data: {e}")
+                    if os.path.exists(path):
+                        os.remove(path)
+                    continue
             else:
                 logging.info(f"{provider} data already present.")
 
@@ -74,15 +99,50 @@ class CloudIPChecker:
             if not os.path.exists(path):
                 continue
             try:
-                with open(path, 'r') as f:
-                                self.providers_data[provider] = json.load(f)
-                
+                if provider == "do":
+                    with open(path, newline="") as f:
+                        reader = csv.DictReader(
+                            f,
+                            fieldnames=["cidr", "country", "region", "city", "zip_code"],
+                            restkey="extra",
+                            restval=""
+                        )
+                        entries = []
+                        for row in reader:
+                            cidr = (row.get("cidr") or "").strip()
+                            if not cidr or cidr.startswith("#"):
+                                continue
+                            normalized = {"cidr": cidr}
+                            for key, value in row.items():
+                                if key in (None, "cidr"):
+                                    continue
+                                if value is None:
+                                    continue
+                                if isinstance(value, list):
+                                    value = ", ".join(
+                                        v.strip() for v in value if isinstance(v, str) and v.strip()
+                                    )
+                                elif isinstance(value, str):
+                                    value = value.strip()
+                                else:
+                                    value = str(value).strip()
+                                if value:
+                                    normalized[key.replace(" ", "_")] = value
+                            entries.append(normalized)
+                        self.providers_data[provider] = entries
+                else:
+                    with open(path, "r") as f:
+                        self.providers_data[provider] = json.load(f)
             except FileNotFoundError:
-                logging.error('File not found.')
+                logging.error("File not found.")
                 sys.exit(1)
             except json.JSONDecodeError:
-                logging.error('Invalid JSON format.')
+                logging.error("Invalid JSON format.")
                 sys.exit(1)
+            except csv.Error:
+                logging.error("Invalid CSV format.")
+                sys.exit(1)
+
     def lookup_ip(self, ip: str) -> List[Dict[str, Any]]:
         try:
             ip_obj = ipaddress.ip_address(ip)
@@ -135,6 +195,20 @@ class CloudIPChecker:
                         }
                         entry.update(prefix_entry)
                         results.append(entry)
+
+            elif provider == "do":
+                for record in data:
+                    cidr = record.get("cidr")
+                    if cidr and self._ip_in_cidr(ip_obj, cidr):
+                        match = {
+                            "provider": "Digital Ocean",
+                            "cidr": cidr
+                        }
+                        for key, value in record.items():
+                            if key == "cidr" or not value:
+                                continue
+                            match[key] = value
+                        results.append(match)
 
             elif provider == "oci":
                 for region_entry in data.get("regions", []):
