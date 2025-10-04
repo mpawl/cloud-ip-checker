@@ -48,6 +48,17 @@ PROVIDERS = {
         "url": "https://geoip.linode.com/",
         "filename": "linode.csv"
     },
+    "cloudflare": {
+        "urls": [
+            "https://www.cloudflare.com/ips-v4/",
+            "https://www.cloudflare.com/ips-v6/"
+        ],
+        "filename": "cloudflare.txt"
+    },
+    "fastly": {
+        "url": "https://api.fastly.com/public-ip-list",
+        "filename": "fastly.json"
+    },
     "m365": {
         "url": "https://endpoints.office.com/endpoints/worldwide?clientrequestid=b10c5ed1-bad1-445f-b386-b919946339a7",
         "filename": "m365.json"
@@ -63,13 +74,57 @@ class CloudIPChecker:
     def download_files(self, force: bool = False):
         os.makedirs(self.data_dir, exist_ok=True)
         for provider, meta in PROVIDERS.items():
-            if meta["url"] is None:
-                continue  # Handled manually
             path = os.path.join(self.data_dir, meta["filename"])
+            urls = meta.get("urls")
+            single_url = meta.get("url")
+            if urls:
+                if not force and os.path.exists(path):
+                    logging.info(f"{provider} data already present.")
+                    continue
+                cidr_lines: List[str] = []
+                success = True
+                for index, url in enumerate(urls):
+                    logging.info(f"Downloading {provider} data ({index + 1}/{len(urls)})...")
+                    try:
+                        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(request) as response:
+                            data = response.read().decode("utf-8")
+                    except HTTPError as e:
+                        logging.error(f"Failed to download {provider} data (HTTP {e.code}: {e.reason}).")
+                        success = False
+                        break
+                    except URLError as e:
+                        logging.error(f"Failed to download {provider} data ({e.reason}).")
+                        success = False
+                        break
+                    except Exception as e:
+                        logging.error(f"Unexpected error downloading {provider} data: {e}")
+                        success = False
+                        break
+                    lines = [line.strip() for line in data.splitlines() if line.strip()]
+                    cidr_lines.extend(lines)
+                if not success:
+                    if os.path.exists(path):
+                        os.remove(path)
+                    continue
+                try:
+                    with open(path, "w", newline="\n") as out_file:
+                        if cidr_lines:
+                            out_file.write("\n".join(cidr_lines) + "\n")
+                        else:
+                            out_file.write("")
+                except Exception as e:
+                    logging.error(f"Unexpected error writing {provider} data: {e}")
+                    if os.path.exists(path):
+                        os.remove(path)
+                    continue
+                continue
+            if single_url is None:
+                continue  # Handled manually
             if force or not os.path.exists(path):
                 logging.info(f"Downloading {provider} data...")
                 try:
-                    request = urllib.request.Request(meta["url"], headers={"User-Agent": "Mozilla/5.0"})
+                    request = urllib.request.Request(single_url, headers={"User-Agent": "Mozilla/5.0"})
                     with urllib.request.urlopen(request) as response, open(path, "wb") as out_file:
                         shutil.copyfileobj(response, out_file)
                 except HTTPError as e:
@@ -141,6 +196,16 @@ class CloudIPChecker:
                 entries.append(normalized)
         return entries
 
+    def _load_cidr_file(self, path: str) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        with open(path, "r") as handle:
+            for line in handle:
+                value = line.strip()
+                if not value or value.startswith("#"):
+                    continue
+                entries.append({"cidr": value})
+        return entries
+
     def _collect_geoip_matches(
         self,
         ip_obj: ipaddress._BaseAddress,
@@ -180,6 +245,18 @@ class CloudIPChecker:
                         path,
                         fieldnames=["cidr", "country", "region", "city", "postal_code"]
                     )
+                elif provider == "cloudflare":
+                    self.providers_data[provider] = self._load_cidr_file(path)
+                elif provider == "fastly":
+                    with open(path, "r") as f:
+                        payload = json.load(f)
+                    fastly_records: List[Dict[str, Any]] = []
+                    for key in ("addresses", "ipv6_addresses"):
+                        for cidr in payload.get(key, []):
+                            cidr = cidr.strip()
+                            if cidr:
+                                fastly_records.append({"cidr": cidr})
+                    self.providers_data[provider] = fastly_records
                 elif provider == "linode":
                     self.providers_data[provider] = self._load_geoip_csv(
                         path,
@@ -257,6 +334,12 @@ class CloudIPChecker:
 
             elif provider == "do":
                 results.extend(self._collect_geoip_matches(ip_obj, data, "Digital Ocean"))
+
+            elif provider == "cloudflare":
+                results.extend(self._collect_geoip_matches(ip_obj, data, "Cloudflare"))
+
+            elif provider == "fastly":
+                results.extend(self._collect_geoip_matches(ip_obj, data, "Fastly"))
 
             elif provider == "linode":
                 results.extend(self._collect_geoip_matches(ip_obj, data, "Linode"))

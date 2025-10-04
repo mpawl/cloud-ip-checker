@@ -12,6 +12,8 @@
 * Oracle Cloud Infrastructure (OCI)
 * Digital Ocean
 * Linode
+* Cloudflare
+* Fastly
 
 # Dependencies
 
@@ -195,7 +197,7 @@ Match:
   country: US
   region: US-CA
   city: San Francisco
-  zip_code: 94124
+  postal_code: 94124
 ```
 
 ### Linode
@@ -208,6 +210,23 @@ Match:
   country: US
   region: US-NJ
   city: Cedar Knolls
+```
+
+### Cloudflare
+
+```
+Matches for IP 103.21.244.5:
+Match:
+  provider: Cloudflare
+  cidr: 103.21.244.0/22
+```
+### Fastly
+
+```
+Matches for IP 23.235.32.1:
+Match:
+  provider: Fastly
+  cidr: 23.235.32.0/20
 ```
 
 ## Programmatically
