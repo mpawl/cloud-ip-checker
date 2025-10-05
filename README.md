@@ -41,14 +41,21 @@ Below are instructions to manually load Microsoft data files.
 Below is the help screen for `cloud_ip_checker.py`, detailing the command line options. 
 
 ```
-usage: cloud_ip_checker.py [-h] --ip IP [--force-download]
+usage: cloud_ip_checker.py [-h] --ip IP [--force-download] [--timeout TIMEOUT] [--max-retries MAX_RETRIES]
+                           [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [--version]
 
 Lookup cloud provider info for an IP address.
 
 options:
-  -h, --help        show this help message and exit
-  --ip IP           IP address to check
-  --force-download  Force re-download of cloud IP data
+  -h, --help            show this help message and exit
+  --ip IP               IP address to check
+  --force-download      Force re-download of cloud IP data
+  --timeout TIMEOUT     Timeout in seconds for downloads (default: 30.0)
+  --max-retries MAX_RETRIES
+                        Maximum retry attempts (default: 2)
+  --log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
+                        Logging level (default: INFO)
+  --version             Show version and exit
 ```
 
 # Output
