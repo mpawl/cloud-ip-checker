@@ -1,21 +1,52 @@
 #!/usr/bin/env python3
+"""Cloud IP Checker - Lookup cloud provider info for IP addresses."""
+from __future__ import annotations
 
-import logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-
-import sys
 import argparse
-import json
 import csv
+import ipaddress
+import json
+import logging
 import os
 import shutil
-import ipaddress
+import socket
+import sys
+import time
 import urllib.request
-from urllib.error import URLError, HTTPError
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Set, TypedDict
+from urllib.error import HTTPError, URLError
 
 # This is the directory inside of the current directory where data files will be stored.
 DATA_DIR = "cloud_ip_data"
+
+DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_BACKOFF_FACTOR = 1.5
+DEFAULT_RETRY_DELAY = 0.5
+DEFAULT_USER_AGENT = "cloud-ip-checker/1.0"
+DEFAULT_LOG_FORMAT = "%(levelname)s: %(message)s"
+
+__version__ = "1.0.0"
+
+__all__ = [
+    "CloudIPChecker",
+    "CloudIPCheckerError",
+    "DownloadError",
+    "ParseError",
+    "LookupError",
+    "__version__",
+]
+
+
+class ProviderMetaRequired(TypedDict):
+    """Required fields for provider metadata."""
+    filename: str
+
+
+class ProviderMeta(ProviderMetaRequired, total=False):
+    """Provider metadata structure."""
+    url: str
+    urls: List[str]
 
 # Monitored providers and the URLs to download the data files. Microsoft data files are not currently
 # automatable. Reference links are included, however following instructions in README is preferred.
@@ -66,84 +97,151 @@ PROVIDERS = {
 }
 
 
+class CloudIPCheckerError(Exception):
+    """Base exception for CloudIPChecker errors."""
+    pass
+
+
+class DownloadError(CloudIPCheckerError):
+    """Raised when provider data cannot be downloaded."""
+    pass
+
+
+class ParseError(CloudIPCheckerError):
+    """Raised when provider data cannot be parsed."""
+    pass
+
+
+class LookupError(CloudIPCheckerError):
+    """Raised when IP lookup fails."""
+    pass
+
+
 class CloudIPChecker:
-    def __init__(self, data_dir: str = DATA_DIR):
+    """Cloud IP address checker for multiple cloud providers."""
+    
+    def __init__(
+        self,
+        data_dir: str = DATA_DIR,
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
+        user_agent: str = DEFAULT_USER_AGENT,
+        logger: Optional[logging.Logger] = None,
+    ):
+        """
+        Initialize CloudIPChecker.
+        
+        Args:
+            data_dir: Directory where provider data files are stored
+            timeout: HTTP request timeout in seconds
+            max_retries: Maximum retry attempts for failed downloads
+            backoff_factor: Multiplier for retry delay (exponential backoff)
+            retry_delay: Initial delay between retries in seconds
+            user_agent: User-Agent header for HTTP requests
+            logger: Optional logger instance (creates default if None)
+        """
         self.data_dir = data_dir
-        self.providers_data = {}
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.backoff_factor = backoff_factor
+        self.retry_delay = retry_delay
+        self.user_agent = user_agent
+        self.logger = logger or logging.getLogger(__name__)
+        self.providers_data: Dict[str, Any] = {}
+        self._network_cache: Dict[str, ipaddress._BaseNetwork] = {}
+        self._invalid_cidrs: Set[str] = set()
 
     def download_files(self, force: bool = False):
+        """Download provider data files with retry logic."""
         os.makedirs(self.data_dir, exist_ok=True)
         for provider, meta in PROVIDERS.items():
-            path = os.path.join(self.data_dir, meta["filename"])
+            filename = meta.get("filename")
+            if not filename:
+                self.logger.error("Provider %s missing filename", provider)
+                continue
+                
+            path = os.path.join(self.data_dir, filename)
             urls = meta.get("urls")
             single_url = meta.get("url")
+
             if urls:
                 if not force and os.path.exists(path):
-                    logging.info(f"{provider} data already present.")
-                    continue
-                cidr_lines: List[str] = []
-                success = True
-                for index, url in enumerate(urls):
-                    logging.info(f"Downloading {provider} data ({index + 1}/{len(urls)})...")
-                    try:
-                        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urllib.request.urlopen(request) as response:
-                            data = response.read().decode("utf-8")
-                    except HTTPError as e:
-                        logging.error(f"Failed to download {provider} data (HTTP {e.code}: {e.reason}).")
-                        success = False
-                        break
-                    except URLError as e:
-                        logging.error(f"Failed to download {provider} data ({e.reason}).")
-                        success = False
-                        break
-                    except Exception as e:
-                        logging.error(f"Unexpected error downloading {provider} data: {e}")
-                        success = False
-                        break
-                    lines = [line.strip() for line in data.splitlines() if line.strip()]
-                    cidr_lines.extend(lines)
-                if not success:
-                    if os.path.exists(path):
-                        os.remove(path)
+                    self.logger.info("%s data already present.", provider)
                     continue
                 try:
-                    with open(path, "w", newline="\n") as out_file:
-                        if cidr_lines:
-                            out_file.write("\n".join(cidr_lines) + "\n")
-                        else:
-                            out_file.write("")
-                except Exception as e:
-                    logging.error(f"Unexpected error writing {provider} data: {e}")
+                    self._download_multiple_urls(provider, urls, path)
+                except DownloadError as exc:
+                    self.logger.error("%s", exc)
                     if os.path.exists(path):
                         os.remove(path)
-                    continue
                 continue
+
             if single_url is None:
-                continue  # Handled manually
+                self.logger.debug("%s data handled manually.", provider)
+                continue
+
             if force or not os.path.exists(path):
-                logging.info(f"Downloading {provider} data...")
                 try:
-                    request = urllib.request.Request(single_url, headers={"User-Agent": "Mozilla/5.0"})
-                    with urllib.request.urlopen(request) as response, open(path, "wb") as out_file:
-                        shutil.copyfileobj(response, out_file)
-                except HTTPError as e:
-                    logging.error(f"Failed to download {provider} data (HTTP {e.code}: {e.reason}).")
+                    self._download_single_url(provider, single_url, path)
+                except DownloadError as exc:
+                    self.logger.error("%s", exc)
                     if os.path.exists(path):
                         os.remove(path)
-                    continue
-                except URLError as e:
-                    logging.error(f"Failed to download {provider} data ({e.reason}).")
-                    if os.path.exists(path):
-                        os.remove(path)
-                    continue
-                except Exception as e:
-                    logging.error(f"Unexpected error downloading {provider} data: {e}")
-                    if os.path.exists(path):
-                        os.remove(path)
-                    continue
             else:
-                logging.info(f"{provider} data already present.")
+                self.logger.info("%s data already present.", provider)
+
+    def _download_multiple_urls(self, provider: str, urls: List[str], path: str) -> None:
+        """Download and merge data from multiple URLs."""
+        cidr_lines: List[str] = []
+        for index, url in enumerate(urls, start=1):
+            self.logger.info("Downloading %s data (%s/%s)...", provider, index, len(urls))
+            raw_data = self._fetch_url(provider, url)
+            try:
+                text = raw_data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise DownloadError(f"Failed to decode {provider} data from {url}: {exc}") from exc
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            cidr_lines.extend(lines)
+
+        with open(path, "w", newline="\n") as out_file:
+            out_file.write("\n".join(cidr_lines) + ("\n" if cidr_lines else ""))
+
+    def _download_single_url(self, provider: str, url: str, path: str) -> None:
+        """Download data from a single URL."""
+        self.logger.info("Downloading %s data...", provider)
+        raw_data = self._fetch_url(provider, url)
+        with open(path, "wb") as out_file:
+            out_file.write(raw_data)
+
+    def _fetch_url(self, provider: str, url: str) -> bytes:
+        """Fetch URL with retry logic and exponential backoff."""
+        last_error: Optional[BaseException] = None
+        delay = self.retry_delay
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                request = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    return response.read()
+            except (HTTPError, URLError, socket.timeout) as exc:
+                last_error = exc
+                if attempt == self.max_retries:
+                    break
+                self.logger.warning(
+                    "Retrying %s download (%s/%s) after error: %s",
+                    provider, attempt + 1, self.max_retries, exc
+                )
+                time.sleep(delay)
+                delay *= self.backoff_factor
+            except Exception as exc:
+                raise DownloadError(
+                    f"Unexpected error downloading {provider} data from {url}: {exc}"
+                ) from exc
+
+        raise DownloadError(f"Failed to download {provider} data from {url}: {last_error}")
 
     def _load_geoip_csv(
         self,
@@ -235,18 +333,27 @@ class CloudIPChecker:
             return False
 
     def load_data(self):
+        """Load provider data from files with improved error handling."""
+        loaded: Dict[str, Any] = {}
         for provider, meta in PROVIDERS.items():
-            path = os.path.join(self.data_dir, meta["filename"])
-            if not os.path.exists(path):
+            filename = meta.get("filename")
+            if not filename:
+                self.logger.error("Provider %s missing filename", provider)
                 continue
+                
+            path = os.path.join(self.data_dir, filename)
+            if not os.path.exists(path):
+                self.logger.debug("Skipping %s: file not found at %s", provider, path)
+                continue
+                
             try:
                 if provider == "do":
-                    self.providers_data[provider] = self._load_geoip_csv(
+                    loaded[provider] = self._load_geoip_csv(
                         path,
                         fieldnames=["cidr", "country", "region", "city", "postal_code"]
                     )
                 elif provider == "cloudflare":
-                    self.providers_data[provider] = self._load_cidr_file(path)
+                    loaded[provider] = self._load_cidr_file(path)
                 elif provider == "fastly":
                     with open(path, "r") as f:
                         payload = json.load(f)
@@ -256,9 +363,9 @@ class CloudIPChecker:
                             cidr = cidr.strip()
                             if cidr:
                                 fastly_records.append({"cidr": cidr})
-                    self.providers_data[provider] = fastly_records
+                    loaded[provider] = fastly_records
                 elif provider == "linode":
-                    self.providers_data[provider] = self._load_geoip_csv(
+                    loaded[provider] = self._load_geoip_csv(
                         path,
                         fieldnames=["ip_prefix", "alpha2code", "region", "city", "postal_code"],
                         rename={
@@ -268,23 +375,37 @@ class CloudIPChecker:
                     )
                 else:
                     with open(path, "r") as f:
-                        self.providers_data[provider] = json.load(f)
-            except FileNotFoundError:
-                logging.error("File not found.")
-                sys.exit(1)
-            except json.JSONDecodeError:
-                logging.error("Invalid JSON format.")
-                sys.exit(1)
-            except csv.Error:
-                logging.error("Invalid CSV format.")
-                sys.exit(1)
+                        loaded[provider] = json.load(f)
+            except FileNotFoundError as exc:
+                message = f"File not found for provider {provider}: {path}"
+                self.logger.error(message)
+                raise ParseError(message) from exc
+            except json.JSONDecodeError as exc:
+                message = f"Invalid JSON format for provider {provider}: {path}"
+                self.logger.error(message)
+                raise ParseError(message) from exc
+            except csv.Error as exc:
+                message = f"Invalid CSV format for provider {provider}: {path}"
+                self.logger.error(message)
+                raise ParseError(message) from exc
+            except OSError as exc:
+                message = f"Error reading data for provider {provider}: {path}"
+                self.logger.error(message)
+                raise ParseError(message) from exc
+        
+        self.providers_data = loaded
+        self._network_cache.clear()
+        self._invalid_cidrs.clear()
 
     def lookup_ip(self, ip: str) -> List[Dict[str, Any]]:
+        """Lookup IP address in provider data."""
         try:
             ip_obj = ipaddress.ip_address(ip)
-        except:
-            logging.info(f"{ip} is not a valid IP address.")
-            sys.exit(1)
+        except ValueError as exc:
+            raise LookupError(f"{ip} is not a valid IP address.") from exc
+        
+        if not self.providers_data:
+            raise LookupError("Provider data not loaded. Call load_data() first.")
             
         results = []
 
@@ -379,35 +500,94 @@ class CloudIPChecker:
         return results
     
     def _ip_in_cidr(self, ip: ipaddress._BaseAddress, cidr: str) -> bool:
-        try:
-            return ip in ipaddress.ip_network(cidr, strict=False)
-        except ValueError:
+        """Check if IP is in CIDR range with caching for performance."""
+        if cidr in self._invalid_cidrs:
             return False
 
+        network = self._network_cache.get(cidr)
+        if network is None:
+            try:
+                network = ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                self._invalid_cidrs.add(cidr)
+                self.logger.warning("Skipping invalid CIDR '%s'", cidr)
+                return False
+            self._network_cache[cidr] = network
+        return ip in network
 
-def main():
-    # Set up command line options
-    parser = argparse.ArgumentParser(description="Lookup cloud provider info for an IP address.")
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Main CLI entry point with proper error handling."""
+    parser = argparse.ArgumentParser(
+        description="Lookup cloud provider info for an IP address."
+    )
     parser.add_argument('--ip', required=True, help="IP address to check")
-    parser.add_argument('--force-download', action='store_true', help="Force re-download of cloud IP data")
-    args = parser.parse_args()
+    parser.add_argument(
+        '--force-download',
+        action='store_true',
+        help="Force re-download of cloud IP data"
+    )
+    parser.add_argument(
+        '--timeout',
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"Timeout in seconds for downloads (default: {DEFAULT_TIMEOUT})"
+    )
+    parser.add_argument(
+        '--max-retries',
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=f"Maximum retry attempts (default: {DEFAULT_MAX_RETRIES})"
+    )
+    parser.add_argument(
+        '--log-level',
+        default='INFO',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        help="Logging level (default: INFO)"
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'%(prog)s {__version__}',
+        help="Show version and exit"
+    )
+    args = parser.parse_args(argv)
 
-    checker = CloudIPChecker()
+    # Configure logging
+    logging.basicConfig(level=args.log_level, format=DEFAULT_LOG_FORMAT)
+    logger = logging.getLogger(__name__)
 
-    # Sanitize and Verify that input is an IP. Quit if not.
-    args.ip = args.ip[:39].strip()
-    if not checker.is_ip_address(args.ip):
-        logging.info(f"{args.ip} is not a valid IP address.")
-        sys.exit(1)
+    # Create checker with configuration
+    checker = CloudIPChecker(
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+        logger=logger,
+    )
 
-    checker.download_files(force=args.force_download)
-    checker.load_data()
-    results = checker.lookup_ip(args.ip)
+    # Sanitize IP input
+    ip_input = args.ip[:39].strip()
+
+    try:
+        checker.download_files(force=args.force_download)
+        checker.load_data()
+        results = checker.lookup_ip(ip_input)
+    except LookupError as exc:
+        logger.info("%s", exc)
+        return 1
+    except (DownloadError, ParseError) as exc:
+        logger.error("%s", exc)
+        return 1
+    except CloudIPCheckerError as exc:
+        logger.error("%s", exc)
+        return 1
+    except Exception as exc:
+        logger.exception("Unexpected error: %s", exc)
+        return 1
 
     if not results:
-        print(f"No matches found for IP {args.ip}")
+        print(f"No matches found for IP {ip_input}")
     else:
-        print(f"Matches for IP {args.ip}:")
+        print(f"Matches for IP {ip_input}:")
         for res in results:
             print("Match:")
             for key, value in res.items():
@@ -416,6 +596,8 @@ def main():
                 print(f"  {key}: {value}")
             print("")
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
