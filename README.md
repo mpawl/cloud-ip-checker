@@ -31,7 +31,7 @@ Below are instructions to manually load Microsoft data files.
 
 * Updated Azure data files can be found [here](https://www.microsoft.com/en-us/download/details.aspx?id=56519). 
 	* Use the Download button to download manually and place the file in `DATA_DIR\azure.json` OR
-	* Copy the link in the Download button and execute: `curl -sSL -o ./cloud_ip_data/azure.json "https://download.microsoft.com/download/7/1/d/71d86715-5596-4529-9b13-da13a5de5b63/ServiceTags_Public_20250929.json"`
+	* Copy the link in the Download button and execute: `curl -sSL -o ./cloud_ip_data/azure.json "https://download.microsoft.com/download/7/1/d/71d86715-5596-4529-9b13-da13a5de5b63/ServiceTags_Public_20251020.json"`
 * Updated M365 data files can be found [here](https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges?view=o365-worldwide). 
 	* Use the JSON formatted link under the Download section to download manually and place the file in `DATA_DIR\m365.json` OR
 	* Copy the link in Download > JSON formatted link and execute: `curl -sSL -o ./cloud_ip_data/azure.json "hhttps://endpoints.office.com/endpoints/worldwide?clientrequestid=b10c5ed1-bad1-445f-b386-b919946339a7"`

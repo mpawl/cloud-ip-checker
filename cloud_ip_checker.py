@@ -52,7 +52,7 @@ class ProviderMeta(ProviderMetaRequired, total=False):
 # automatable. Reference links are included, however following instructions in README is preferred.
 PROVIDERS = {
     "azure": {
-        "url": "https://download.microsoft.com/download/7/1/d/71d86715-5596-4529-9b13-da13a5de5b63/ServiceTags_Public_20250929.json",
+        "url": "https://download.microsoft.com/download/7/1/d/71d86715-5596-4529-9b13-da13a5de5b63/ServiceTags_Public_20251020.json",
         "filename": "azure.json"
     },
     "aws": {
