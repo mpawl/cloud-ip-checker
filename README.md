@@ -23,7 +23,7 @@ This tool does not have any external dependencies. Only Python 3.6+.
 
 `cloud_ip_checker.py` requires a directory in the present working directory to store the cloud provider data files. By default, this directory is `./cloud_ip_data`. There is an empty directory in this repository. Changing the data directory requires modification of the `DATA_DIR` variable in `cloud_ip_checker.py`. 
 
-Current data files for AWS, GCP, and OCI can be fetched programmatically by the script. Microsoft does not published an automation friendly endpoint. `cloud_ip_checker.py` embeds a URL for one version of M365 and Azure data files from June 2025. Use caution when using `--force-download` command line option. It could overwrite your newer, manually loaded Microsoft data files. 
+Current data files for AWS, GCP, and OCI can be fetched programmatically by the script. Microsoft does not published an automation friendly endpoint. `cloud_ip_checker.py` embeds a URL for one version of M365 and Azure data files and is occasionally updated. Use caution when using `--force-download` command line option. It could overwrite your newer, manually loaded Microsoft data files. 
 
 ## Loading Microsoft Data Files
 
