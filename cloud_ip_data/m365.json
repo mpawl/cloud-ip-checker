@@ -273,21 +273,6 @@
     "notes": "OneDrive for Business: supportability, telemetry, APIs, and embedded email links"
   },
   {
-    "id": 33,
-    "serviceArea": "SharePoint",
-    "serviceAreaDisplayName": "SharePoint Online and OneDrive for Business",
-    "urls": [
-      "*.search.production.apac.trafficmanager.net",
-      "*.search.production.emea.trafficmanager.net",
-      "*.search.production.us.trafficmanager.net"
-    ],
-    "tcpPorts": "443",
-    "expressRoute": false,
-    "category": "Default",
-    "required": false,
-    "notes": "SharePoint Hybrid Search - Endpoint to SearchContentService where the hybrid crawler feeds documents"
-  },
-  {
     "id": 35,
     "serviceArea": "SharePoint",
     "serviceAreaDisplayName": "SharePoint Online and OneDrive for Business",
@@ -730,7 +715,6 @@
     "serviceAreaDisplayName": "Microsoft 365 Common and Office Online",
     "urls": [
       "officecdn.microsoft.com",
-      "officecdn.microsoft.com.edgesuite.net",
       "otelrules.azureedge.net"
     ],
     "tcpPorts": "80,443",
